@@ -64,6 +64,7 @@ class FlickrEntityDataset(BaseDataset):
 
         answer = item['sentence'].replace(ENTITY_START, "")
         location_strs = []
+        ###############################
         for bbox_ids in item['boxes_seq']:
             location_str = []
             for bbox_id in bbox_ids:
@@ -80,7 +81,9 @@ class FlickrEntityDataset(BaseDataset):
                 location_str.append((location_tokens, area))
             location_str = sorted(location_str, key=lambda a:a[1])
             location_strs.append(" ".join([l[0] for l in location_str]))
+        ############################  
         answer = answer.split(ENTITY_END)
+        ####################
         merge_answer = ""
         final_index = len(answer)
         for index, a in enumerate(answer):
@@ -88,7 +91,9 @@ class FlickrEntityDataset(BaseDataset):
                 merge_answer += a
             else:
                 merge_answer += a + " " + location_strs[index]
-
+        #########################
         self.conv.append_message(self.conv.roles[0], question)
+        ####################
         self.conv.append_message(self.conv.roles[1], merge_answer)
+        ####################
         return self.conv.get_prompt()

@@ -4,7 +4,8 @@
 # LICENSE file in the root directory of this source tree.
 
 """A simple web interactive chat demo based on gradio."""
-
+import os
+os.environ["CUDA_VISIBLE_DEVICES"]="1"
 from argparse import ArgumentParser
 from pathlib import Path
 from PIL import Image, ImageDraw
@@ -25,7 +26,14 @@ sys.path.append("./")
 from pink import *
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
 from pink.conversation import conv_llama2
+# 检查CUDA设备的可用性
+def check_cuda():
+    if torch.cuda.is_available():
+        print(f"CUDA is available. Using GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        print("CUDA is not available. Using CPU.")
 
+check_cuda()
 
 DEFAULT_CKPT_PATH = '/data/Katherine/data/Pink/base_fgvc_2025_01_05'
 DEFAULT_LLAMA_PATH='/data/Katherine/data/Llama-2-7b-chat-hf_2'
@@ -34,9 +42,9 @@ PUNCTUATION = "！？。＂＃＄％＆＇（）＊＋，－／：；＜＝＞�
 
 def _get_args():
     parser = ArgumentParser()
-    parser.add_argument("-c", "--checkpoint-path", type=str, default=DEFAULT_CKPT_PATH,
+    parser.add_argument( "--checkpoint-path", type=str, default=DEFAULT_CKPT_PATH,
                         help="Checkpoint name or path, default to %(default)r")
-    parser.add_argument("-l", "--llama-path", type=str, default=DEFAULT_LLAMA_PATH,
+    parser.add_argument("-c", "--llama-path", type=str, default=DEFAULT_LLAMA_PATH,
                         help="LLaMA Checkpoint name or path, default to %(default)r")
     parser.add_argument("--cpu-only", action="store_true", help="Run demo with CPU only")
 
@@ -114,6 +122,7 @@ def _launch_demo(args, model, tokenizer):
     DEFAULT_EOS_TOKEN = "</s>"
 
     def predict(_chatbot, task_history, bbox_state):
+        print("-------------------state---------------",bbox_state)
         chat_query = _chatbot[-1][0]
         query = task_history[-1][0]
         history_cp = task_history
@@ -232,14 +241,18 @@ def _launch_demo(args, model, tokenizer):
         return history, task_history, ""
 
     def add_file(history, task_history, bbox_state, file):
-        # history = history + [((file.name,), None)]
-        # task_history = task_history + [((file.name,), None)]
-        copy_image = Image.open(file.name).convert("RGB")
-        bbox_state['ori_image'] = copy.deepcopy(copy_image)
-        copy_image = copy_image.resize((336, 336), Image.Resampling.BILINEAR)
-        bbox_state['raw_image'] = copy_image
-        bbox_state['bbox_image'] = copy.deepcopy(copy_image)
-        return history, task_history, bbox_state, copy_image
+        try:
+            copy_image = Image.open(file.name).convert("RGB")
+            bbox_state['ori_image'] = copy.deepcopy(copy_image)
+            copy_image = copy_image.resize((336, 336), Image.Resampling.BILINEAR)
+            bbox_state['raw_image'] = copy_image
+            bbox_state['bbox_image'] = copy.deepcopy(copy_image)
+            print("Image loaded and processed successfully.")
+            return history, task_history, bbox_state, copy_image
+        except Exception as e:
+            print(f"Error loading image: {e}")
+            return history, task_history, bbox_state, None
+
 
     def reset_user_input():
         return gr.update(value="")
@@ -260,7 +273,7 @@ def _launch_demo(args, model, tokenizer):
         return bbox_state, raw_image
 
     def bbox_select(bbox_state, evt: gr.SelectData):
-        print(evt.index)
+        print(f"Event data: {evt}")
         bbox_image = bbox_state['bbox_image']
         if bbox_state['press']:
             bbox_state['bbox'][-1] += evt.index
@@ -308,7 +321,7 @@ def _launch_demo(args, model, tokenizer):
         </ul>
         """)
 
-        image_holder = gr.Image(height=336, width=336)
+        image_holder = gr.Image(height=336, width=336, interactive=True)
         chatbot = gr.Chatbot(label='Pink-Chat')
         query = gr.Textbox(lines=1, label='输入')
         with gr.Row():
@@ -325,7 +338,7 @@ def _launch_demo(args, model, tokenizer):
         empty_bin.click(reset_state, [task_history, bbox_state], [chatbot, image_holder], show_progress=True)
         addfile_btn.click(reset_state, [task_history, bbox_state], [chatbot, image_holder], show_progress=True)
         addfile_btn.upload(add_file, [chatbot, task_history, bbox_state, addfile_btn], [chatbot, task_history, bbox_state, image_holder], show_progress=True)
-        image_holder.change(bbox_select, [bbox_state], [bbox_state, image_holder])
+        image_holder.select(bbox_select, [bbox_state], [bbox_state, image_holder])
 
 
     demo.queue().launch(

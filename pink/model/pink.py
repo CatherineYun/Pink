@@ -129,7 +129,8 @@ class PinkModel(LlamaForCausalLM):
             super().__init__(config)
         # Initialize weights and apply final processing
         with visual_adapter(hidden_dim=config.adapter_vision_dim, scale=config.adapter_vision_scale, dropout=config.adapter_vision_dropout, attn=config.adapter_attn, mlp=config.adapter_mlp, enabled=config.adapter_vision_enable, non_linear=config.adapter_non_linear):
-            vision_model = CLIPVisionInitModel.from_pretrained(config.clip_path, image_size=config.crop_size, ignore_mismatched_sizes=True)
+            # vision_model = CLIPVisionInitModel.from_pretrained(config.clip_path, image_size=config.crop_size, ignore_mismatched_sizes=True)
+            vision_model = CLIPVisionInitModel.from_pretrained('/data/Katherine/data/clip-vit-large-patch14', image_size=config.crop_size, ignore_mismatched_sizes=True)
             if config.adapter_vision_enable:
                 for index, layer in enumerate(vision_model.vision_model.encoder.layers[config.clip_select_layer:]):
                     if index == 0:
