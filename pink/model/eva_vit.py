@@ -68,92 +68,186 @@ class Mlp(nn.Module):
         x = self.drop(x)
         return x
 
+def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
+    """Applies Rotary Position Embedding to the query and key tensors.
 
+    Args:
+        q (`torch.Tensor`): The query tensor.
+        k (`torch.Tensor`): The key tensor.
+        cos (`torch.Tensor`): The cosine part of the rotary embedding.
+        sin (`torch.Tensor`): The sine part of the rotary embedding.
+        position_ids (`torch.Tensor`, *optional*):
+            Deprecated and unused.
+        unsqueeze_dim (`int`, *optional*, defaults to 1):
+            The 'unsqueeze_dim' argument specifies the dimension along which to unsqueeze cos[position_ids] and
+            sin[position_ids] so that they can be properly broadcasted to the dimensions of q and k. For example, note
+            that cos[position_ids] and sin[position_ids] have the shape [batch_size, seq_len, head_dim]. Then, if q and
+            k have the shape [batch_size, heads, seq_len, head_dim], then setting unsqueeze_dim=1 makes
+            cos[position_ids] and sin[position_ids] broadcastable to the shapes of q and k. Similarly, if q and k have
+            the shape [batch_size, seq_len, heads, head_dim], then set unsqueeze_dim=2.
+    Returns:
+        `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
+    """
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
+    return q_embed, k_embed
+
+# class Attention(nn.Module):
+#     def __init__(
+#             self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0.,
+#             proj_drop=0., window_size=None, attn_head_dim=None):
+#         super().__init__()
+#         self.num_heads = num_heads
+#         head_dim = dim // num_heads
+#         if attn_head_dim is not None:
+#             head_dim = attn_head_dim
+#         all_head_dim = head_dim * self.num_heads
+#         self.scale = qk_scale or head_dim ** -0.5
+
+#         self.qkv = nn.Linear(dim, all_head_dim * 3, bias=False)
+#         if qkv_bias:
+#             self.q_bias = nn.Parameter(torch.zeros(all_head_dim))
+#             self.v_bias = nn.Parameter(torch.zeros(all_head_dim))
+#         else:
+#             self.q_bias = None
+#             self.v_bias = None
+
+#         if window_size:
+#             self.window_size = window_size
+#             self.num_relative_distance = (2 * window_size[0] - 1) * (2 * window_size[1] - 1) + 3
+#             self.relative_position_bias_table = nn.Parameter(
+#                 torch.zeros(self.num_relative_distance, num_heads))  # 2*Wh-1 * 2*Ww-1, nH
+#             # cls to token & token 2 cls & cls to cls
+
+#             # get pair-wise relative position index for each token inside the window
+#             coords_h = torch.arange(window_size[0])
+#             coords_w = torch.arange(window_size[1])
+#             coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, Wh, Ww
+#             coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
+#             relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
+#             relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
+#             relative_coords[:, :, 0] += window_size[0] - 1  # shift to start from 0
+#             relative_coords[:, :, 1] += window_size[1] - 1
+#             relative_coords[:, :, 0] *= 2 * window_size[1] - 1
+#             relative_position_index = \
+#                 torch.zeros(size=(window_size[0] * window_size[1] + 1, ) * 2, dtype=relative_coords.dtype)
+#             relative_position_index[1:, 1:] = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
+#             relative_position_index[0, 0:] = self.num_relative_distance - 3
+#             relative_position_index[0:, 0] = self.num_relative_distance - 2
+#             relative_position_index[0, 0] = self.num_relative_distance - 1
+
+#             self.register_buffer("relative_position_index", relative_position_index)
+#         else:
+#             self.window_size = None
+#             self.relative_position_bias_table = None
+#             self.relative_position_index = None
+
+#         self.attn_drop = nn.Dropout(attn_drop)
+#         self.proj = nn.Linear(all_head_dim, dim)
+#         self.proj_drop = nn.Dropout(proj_drop)
+
+#     def forward(self, x, rel_pos_bias=None):
+#         B, N, C = x.shape
+#         qkv_bias = None
+#         if self.q_bias is not None:
+#             qkv_bias = torch.cat((self.q_bias, torch.zeros_like(self.v_bias, requires_grad=False), self.v_bias))
+#         # qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+#         qkv = F.linear(input=x, weight=self.qkv.weight, bias=qkv_bias)
+#         qkv = qkv.reshape(B, N, 3, self.num_heads, -1).permute(2, 0, 3, 1, 4)
+#         q, k, v = qkv[0], qkv[1], qkv[2]   # make torchscript happy (cannot use tensor as tuple)
+
+#         q = q * self.scale
+#         attn = (q @ k.transpose(-2, -1))
+
+#         if self.relative_position_bias_table is not None:
+#             relative_position_bias = \
+#                 self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+#                     self.window_size[0] * self.window_size[1] + 1,
+#                     self.window_size[0] * self.window_size[1] + 1, -1)  # Wh*Ww,Wh*Ww,nH
+#             relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
+#             attn = attn + relative_position_bias.unsqueeze(0)
+
+#         if rel_pos_bias is not None:
+#             attn = attn + rel_pos_bias
+        
+#         attn = attn.softmax(dim=-1)
+#         attn = self.attn_drop(attn)
+
+#         x = (attn @ v).transpose(1, 2).reshape(B, N, -1)
+#         x = self.proj(x)
+#         x = self.proj_drop(x)
+#         return x
+
+###################new attention######################
 class Attention(nn.Module):
     def __init__(
-            self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0.,
-            proj_drop=0., window_size=None, attn_head_dim=None):
+        self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0.,
+        proj_drop=0., window_size=None, attn_head_dim=None, rope_theta=10000,
+        rope_repeat=False, absorb=False, kv_dropout=0., num_key_value_heads=8
+    ):
         super().__init__()
         self.num_heads = num_heads
-        head_dim = dim // num_heads
-        if attn_head_dim is not None:
-            head_dim = attn_head_dim
+        self.num_key_value_heads = num_key_value_heads
+        self.num_key_value_groups = num_heads // num_key_value_heads
+        head_dim = dim // num_heads if attn_head_dim is None else attn_head_dim
+        self.head_dim = head_dim
         all_head_dim = head_dim * self.num_heads
         self.scale = qk_scale or head_dim ** -0.5
-
-        self.qkv = nn.Linear(dim, all_head_dim * 3, bias=False)
-        if qkv_bias:
-            self.q_bias = nn.Parameter(torch.zeros(all_head_dim))
-            self.v_bias = nn.Parameter(torch.zeros(all_head_dim))
+        self.absorb = absorb
+        self.kv_dropout = kv_dropout
+        self.rope_repeat = rope_repeat
+        
+        self.k_proj = nn.Linear(dim, num_key_value_heads * head_dim, bias=True)
+        self.v_proj = nn.Linear(dim, num_key_value_heads * head_dim, bias=True)
+        
+        if not absorb:
+            self.q_proj = nn.Linear(dim, num_heads * head_dim, bias=True)
+            self.o_proj = nn.Linear(num_heads * head_dim, dim, bias=False)
+            self.k_up_proj = nn.Linear(num_key_value_heads * head_dim, num_heads * head_dim, bias=False)
+            self.v_up_proj = nn.Linear(num_key_value_heads * head_dim, num_heads * head_dim, bias=False)
         else:
-            self.q_bias = None
-            self.v_bias = None
-
-        if window_size:
-            self.window_size = window_size
-            self.num_relative_distance = (2 * window_size[0] - 1) * (2 * window_size[1] - 1) + 3
-            self.relative_position_bias_table = nn.Parameter(
-                torch.zeros(self.num_relative_distance, num_heads))  # 2*Wh-1 * 2*Ww-1, nH
-            # cls to token & token 2 cls & cls to cls
-
-            # get pair-wise relative position index for each token inside the window
-            coords_h = torch.arange(window_size[0])
-            coords_w = torch.arange(window_size[1])
-            coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, Wh, Ww
-            coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
-            relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
-            relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
-            relative_coords[:, :, 0] += window_size[0] - 1  # shift to start from 0
-            relative_coords[:, :, 1] += window_size[1] - 1
-            relative_coords[:, :, 0] *= 2 * window_size[1] - 1
-            relative_position_index = \
-                torch.zeros(size=(window_size[0] * window_size[1] + 1, ) * 2, dtype=relative_coords.dtype)
-            relative_position_index[1:, 1:] = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
-            relative_position_index[0, 0:] = self.num_relative_distance - 3
-            relative_position_index[0:, 0] = self.num_relative_distance - 2
-            relative_position_index[0, 0] = self.num_relative_distance - 1
-
-            self.register_buffer("relative_position_index", relative_position_index)
-        else:
-            self.window_size = None
-            self.relative_position_bias_table = None
-            self.relative_position_index = None
-
+            self.q_proj = nn.Linear(dim, num_heads * num_key_value_heads * head_dim, bias=True)
+            self.o_proj = nn.Linear(num_heads * num_key_value_heads * head_dim, dim, bias=False)
+        
         self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(all_head_dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x, rel_pos_bias=None):
+    def forward(self, x, position_embeddings=None, attention_mask=None, past_key_value=None):
         B, N, C = x.shape
-        qkv_bias = None
-        if self.q_bias is not None:
-            qkv_bias = torch.cat((self.q_bias, torch.zeros_like(self.v_bias, requires_grad=False), self.v_bias))
-        # qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        qkv = F.linear(input=x, weight=self.qkv.weight, bias=qkv_bias)
-        qkv = qkv.reshape(B, N, 3, self.num_heads, -1).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]   # make torchscript happy (cannot use tensor as tuple)
-
-        q = q * self.scale
-        attn = (q @ k.transpose(-2, -1))
-
-        if self.relative_position_bias_table is not None:
-            relative_position_bias = \
-                self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
-                    self.window_size[0] * self.window_size[1] + 1,
-                    self.window_size[0] * self.window_size[1] + 1, -1)  # Wh*Ww,Wh*Ww,nH
-            relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
-            attn = attn + relative_position_bias.unsqueeze(0)
-
-        if rel_pos_bias is not None:
-            attn = attn + rel_pos_bias
+        query_states = self.q_proj(x)
+        key_states = self.k_proj(x)
+        value_states = self.v_proj(x)
         
-        attn = attn.softmax(dim=-1)
-        attn = self.attn_drop(attn)
-
-        x = (attn @ v).transpose(1, 2).reshape(B, N, -1)
-        x = self.proj(x)
-        x = self.proj_drop(x)
-        return x
+        if self.absorb:
+            query_states = F.dropout(query_states, p=self.kv_dropout, training=self.training)
+            query_states = query_states.view(B, N, self.num_heads, self.num_key_value_heads * self.head_dim).transpose(1, 2)
+            key_states = key_states.unsqueeze(1)
+            value_states = F.dropout(value_states, p=self.kv_dropout, training=self.training).unsqueeze(1)
+        else:
+            query_states = query_states.view(B, N, self.num_heads, self.head_dim)
+            k_up_weight = self.k_up_proj.weight.view(self.num_heads, self.head_dim, self.num_key_value_heads * self.head_dim)
+            query_states = torch.einsum("bthd,hdc->bhtc", query_states, k_up_weight)
+            key_states = F.dropout(key_states, p=self.kv_dropout, training=self.training).unsqueeze(1)
+            value_states = F.dropout(value_states, p=self.kv_dropout, training=self.training)
+            value_states = self.v_up_proj(value_states).view(B, N, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        if position_embeddings is not None:
+            cos, sin = position_embeddings
+            query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        
+        attn_weights = torch.matmul(query_states, key_states.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        if attention_mask is not None:
+            attn_weights = attn_weights + attention_mask[:, :, :, : key_states.shape[-2]]
+        
+        attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        attn_weights = self.attn_drop(attn_weights)
+        attn_output = torch.matmul(attn_weights, value_states)
+        attn_output = attn_output.transpose(1, 2).contiguous().reshape(B, N, -1)
+        attn_output = self.o_proj(attn_output)
+        
+        return attn_output
 
 
 class Block(nn.Module):
